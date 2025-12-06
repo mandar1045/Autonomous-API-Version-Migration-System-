@@ -307,18 +307,29 @@ class TransformationEngine:
         
         operations = []
         operation_id = 1
-        
-        # Group transformations by file
-        file_transformations: Dict[str, List[TransformationMatch]] = {}
-        
+
+        # Prepare file contents and matches
+        file_contents: Dict[str, str] = {}
+        file_originals: Dict[str, str] = {}
+        file_matches: Dict[str, List[TransformationMatch]] = {}
+
         for opportunity in analysis_results.get("transformation_opportunities", []):
             file_path = opportunity["file"]
+            if file_path not in file_contents:
+                source_file = os.path.join(project.source_path, file_path)
+                try:
+                    with open(source_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    file_originals[file_path] = content
+                    file_contents[file_path] = content
+                    file_matches[file_path] = []
+                except Exception as e:
+                    logger.warning(f"Error reading {file_path}: {e}")
+                    continue
+
             usage = opportunity["usage"]
             potential_rules = opportunity["potential_rules"]
-            
-            if file_path not in file_transformations:
-                file_transformations[file_path] = []
-            
+
             # Create transformations for each applicable rule
             for rule in potential_rules:
                 # Simulate code analysis for the specific usage
@@ -335,37 +346,23 @@ class TransformationEngine:
                         confidence=rule.confidence,
                         context={"api_usage": usage}
                     )
-                    file_transformations[file_path].append(match)
-        
+                    file_matches[file_path].append(match)
+                    # Apply transformation immediately
+                    file_contents[file_path] = self.mapper.apply_transformation(file_contents[file_path], match)
+
         # Create operations for each file
-        for file_path, matches in file_transformations.items():
-            source_file = os.path.join(project.source_path, file_path)
-            target_file = os.path.join(project.target_path, file_path)
-            
-            try:
-                with open(source_file, 'r', encoding='utf-8') as f:
-                    original_content = f.read()
-                
-                # Apply all transformations to the file content
-                transformed_content = original_content
-                for match in matches:
-                    transformed_content = self.mapper.apply_transformation(transformed_content, match)
-                
-                # Create operation
-                operation = TransformationOperation(
-                    id=f"op_{operation_id}",
-                    file_path=file_path,
-                    original_content=original_content,
-                    transformed_content=transformed_content,
-                    changes=matches,
-                    execution_order=operation_id
-                )
-                
-                operations.append(operation)
-                operation_id += 1
-                
-            except Exception as e:
-                logger.error(f"Error planning transformation for {file_path}: {e}")
+        for file_path in file_contents:
+            operation = TransformationOperation(
+                id=f"op_{operation_id}",
+                file_path=file_path,
+                original_content=file_originals[file_path],
+                transformed_content=file_contents[file_path],
+                changes=file_matches[file_path],
+                execution_order=operation_id
+            )
+
+            operations.append(operation)
+            operation_id += 1
         
         # Build dependency graph
         dependency_graph = self._build_dependency_graph(operations)
