@@ -14,7 +14,7 @@ def fetch_user_data(user_id: str) -> Dict[str, Any]:
     url = f"https://api.example.com/users/{user_id}"
     
     # Old API: timeout in seconds
-    response = requests.get(url, timeout=30)
+    response = requests.get(url, timeout=30*1000)
     
     if response.status_code == 200:
         return response.json()
@@ -27,7 +27,7 @@ def create_user(user_data: Dict[str, Any]) -> Dict[str, Any]:
     url = "https://api.example.com/users"
     
     # Old API: using 'data' parameter
-    response = requests.post(url, data=json.dumps(user_data), timeout=60)
+    response = requests.post(url, json=json.dumps(user_data), timeout=60)
     
     if response.status_code == 201:
         return response.json()
@@ -40,7 +40,7 @@ def update_user(user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
     url = f"https://api.example.com/users/{user_id}"
     
     # Old API: PUT with data parameter
-    response = requests.put(url, data=json.dumps(updates), timeout=45)
+    response = requests.put(url, json=json.dumps(updates), timeout=45)
     
     if response.status_code == 200:
         return response.json()
@@ -53,7 +53,7 @@ def delete_user(user_id: str) -> bool:
     url = f"https://api.example.com/users/{user_id}"
     
     # Old API: DELETE with timeout
-    response = requests.delete(url, timeout=10)
+    response = requests.delete(url, timeout=10*1000)
     
     return response.status_code == 204
 
@@ -66,7 +66,7 @@ def batch_operations(operations: list) -> list:
         try:
             if operation['type'] == 'get':
                 # Old API: GET request
-                response = requests.get(operation['url'], timeout=30)
+                response = requests.get(operation['url'], timeout=30*1000)
                 results.append({
                     'id': operation['id'],
                     'status': 'success',

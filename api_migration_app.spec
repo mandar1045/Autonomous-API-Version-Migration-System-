@@ -1,0 +1,71 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+block_cipher = None
+
+a = Analysis(
+    ['app.py'],
+    pathex=[],
+    binaries=[],
+    datas=[],
+    hiddenimports=[
+        'api_migration_system',
+        'api_migration_system.core',
+        'api_migration_system.core.api_diff_analyzer',
+        'api_migration_system.core.semantic_mapper',
+        'api_migration_system.core.transformation_engine',
+        'tkinter',
+        'tkinter.filedialog',
+        'tkinter.messagebox',
+        'tkinter.scrolledtext',
+        'threading',
+        'pathlib',
+        'json',
+        'os',
+        'sys',
+        'tempfile',
+        'shutil',
+        'uuid',
+        'datetime',
+        'typing',
+        'dataclasses',
+        'enum',
+        'abc',
+        'logging',
+        're',
+        'time',
+        'hashlib'
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='API_Migration_System',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=None,
+)

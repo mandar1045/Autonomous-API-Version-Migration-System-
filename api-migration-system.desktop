@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=API Migration System
+Comment=Autonomous API Version Migration with Formal Verification
+Exec=/home/mandar12/Desktop/software/run_app.sh
+Icon=/home/mandar12/Desktop/software/icon.png
+Terminal=false
+Categories=Development;Utility;
+Keywords=api;migration;code;transformation;
