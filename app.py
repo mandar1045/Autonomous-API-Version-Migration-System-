@@ -31,6 +31,7 @@ class APIMigrationApp:
         # Initialize variables
         self.source_dir = tk.StringVar()
         self.target_dir = tk.StringVar()
+        self.source_mode = tk.StringVar(value="directory")  # "directory" or "file"
         self.engine = None
         self.project_id = None
         self.is_running = False
@@ -49,24 +50,35 @@ class APIMigrationApp:
         title_label.pack(pady=(0, 20))
 
         # Directory selection frame
-        dir_frame = tk.LabelFrame(main_frame, text="Project Directories", padx=10, pady=10)
+        dir_frame = tk.LabelFrame(main_frame, text="Project Source & Target", padx=10, pady=10)
         dir_frame.pack(fill=tk.X, pady=(0, 20))
 
-        # Source directory
+        # Source mode selection
+        mode_frame = tk.Frame(dir_frame)
+        mode_frame.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Label(mode_frame, text="Source Type:", width=12, anchor="w").pack(side=tk.LEFT)
+        tk.Radiobutton(mode_frame, text="Directory", variable=self.source_mode,
+                      value="directory", command=self.update_source_label).pack(side=tk.LEFT, padx=(10, 5))
+        tk.Radiobutton(mode_frame, text="File", variable=self.source_mode,
+                      value="file", command=self.update_source_label).pack(side=tk.LEFT)
+
+        # Source directory/file
         source_frame = tk.Frame(dir_frame)
         source_frame.pack(fill=tk.X, pady=(0, 10))
 
-        tk.Label(source_frame, text="Source Directory:", width=15, anchor="w").pack(side=tk.LEFT)
+        self.source_label = tk.Label(source_frame, text="Source Directory:", width=15, anchor="w")
+        self.source_label.pack(side=tk.LEFT)
         tk.Entry(source_frame, textvariable=self.source_dir, width=50).pack(side=tk.LEFT, padx=(10, 10))
-        tk.Button(source_frame, text="Browse", command=self.select_source_dir).pack(side=tk.LEFT)
+        tk.Button(source_frame, text="Browse", command=self.select_source).pack(side=tk.LEFT)
 
-        # Target directory
+        # Target file
         target_frame = tk.Frame(dir_frame)
         target_frame.pack(fill=tk.X)
 
-        tk.Label(target_frame, text="Target Directory:", width=15, anchor="w").pack(side=tk.LEFT)
+        tk.Label(target_frame, text="Target File:", width=15, anchor="w").pack(side=tk.LEFT)
         tk.Entry(target_frame, textvariable=self.target_dir, width=50).pack(side=tk.LEFT, padx=(10, 10))
-        tk.Button(target_frame, text="Browse", command=self.select_target_dir).pack(side=tk.LEFT)
+        tk.Button(target_frame, text="Browse", command=self.select_target_file).pack(side=tk.LEFT)
 
         # Control buttons frame
         button_frame = tk.Frame(main_frame)
@@ -98,17 +110,33 @@ class APIMigrationApp:
         status_bar = tk.Label(main_frame, textvariable=self.status_var, bd=1, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
-    def select_source_dir(self):
-        """Select source directory."""
-        directory = filedialog.askdirectory(title="Select Source Directory")
-        if directory:
-            self.source_dir.set(directory)
+    def update_source_label(self):
+        """Update the source label based on selected mode."""
+        if self.source_mode.get() == "directory":
+            self.source_label.config(text="Source Directory:")
+        else:
+            self.source_label.config(text="Source File:")
 
-    def select_target_dir(self):
-        """Select target directory."""
-        directory = filedialog.askdirectory(title="Select Target Directory")
-        if directory:
-            self.target_dir.set(directory)
+    def select_source(self):
+        """Select source directory or file based on mode."""
+        if self.source_mode.get() == "directory":
+            path = filedialog.askdirectory(title="Select Source Directory")
+        else:
+            path = filedialog.askopenfilename(
+                title="Select Source File",
+                filetypes=[("Python files", "*.py"), ("JavaScript files", "*.js"), ("All files", "*.*")]
+            )
+        if path:
+            self.source_dir.set(path)
+
+    def select_target_file(self):
+        """Select target file."""
+        file_path = filedialog.askopenfilename(
+            title="Select Target File",
+            filetypes=[("Python files", "*.py"), ("JavaScript files", "*.js"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.target_dir.set(file_path)
 
     def log_message(self, message):
         """Log a message to the progress text area."""
@@ -125,15 +153,16 @@ class APIMigrationApp:
         target = self.target_dir.get()
 
         if not source or not target:
-            messagebox.showerror("Error", "Please select both source and target directories.")
+            messagebox.showerror("Error", "Please select both source and target.")
             return
 
         if not os.path.exists(source):
-            messagebox.showerror("Error", "Source directory does not exist.")
+            source_type = "file" if self.source_mode.get() == "file" else "directory"
+            messagebox.showerror("Error", f"Source {source_type} does not exist.")
             return
 
         # Create target directory if it doesn't exist
-        os.makedirs(target, exist_ok=True)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
 
         # Disable buttons
         self.run_button.config(state=tk.DISABLED, text="Running...")
@@ -200,6 +229,26 @@ class APIMigrationApp:
                     cert = operation.proof_certificate
                     self.log_message(f"      🔐 Proof ID: {cert['transformation_id'][:8]}...")
                     self.log_message(f"      ✅ Status: {cert['verification_status']}")
+
+            # Test source and target files
+            self.log_message("\n🧪 Testing source and target files...")
+            test_results = self.engine.test_source_and_target(self.project_id)
+
+            self.log_message(f"   📊 Source tests: {'✅ Passed' if test_results['source_tests'].get('success') else '❌ Failed'}")
+            self.log_message(f"   📊 Target tests: {'✅ Passed' if test_results['target_tests'].get('success') else '❌ Failed'}")
+
+            if test_results['comparison']['equivalent']:
+                self.log_message("   ✅ Test results are equivalent")
+            else:
+                self.log_message("   ⚠️  Test results differ - please review")
+
+            # Create tested file (test file for migrated code)
+            self.log_message("\n📝 Creating tested file...")
+            try:
+                test_file_path = self.engine.create_tested_file(self.project_id)
+                self.log_message(f"   ✅ Test file created: {test_file_path}")
+            except Exception as e:
+                self.log_message(f"   ⚠️  Could not create test file: {str(e)}")
 
             self.log_message("\n✅ Migration completed successfully!")
             self.status_var.set("Migration completed")

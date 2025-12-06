@@ -1,429 +1,346 @@
 """
-API Diff Analyzer - Module 1
+API Difference Analyzer Module
 
-Analyzes Python code to detect API changes between versions using AST parsing.
-Generates structured representations of API signatures and identifies modifications.
+This module provides functionality to analyze API differences between versions
+of source code, supporting both Python and JavaScript.
 """
 
 import ast
 import re
-from typing import Dict, List, Set, Optional, Tuple, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-import logging
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 
 class ChangeType(Enum):
-    """Types of API changes that can be detected."""
+    """Types of API changes."""
+    SIGNATURE_CHANGED = "signature_changed"
     PARAMETER_ADDED = "parameter_added"
     PARAMETER_REMOVED = "parameter_removed"
-    PARAMETER_RENAMED = "parameter_renamed"
     PARAMETER_TYPE_CHANGED = "parameter_type_changed"
     RETURN_TYPE_CHANGED = "return_type_changed"
-    METHOD_DEPRECATED = "method_deprecated"
-    SIGNATURE_CHANGED = "signature_changed"
+    FUNCTION_ADDED = "function_added"
+    FUNCTION_REMOVED = "function_removed"
 
 
 @dataclass
 class APIEntity:
-    """Represents an API entity (function, method, class)."""
+    """Represents an API entity (function, method, etc.)."""
     name: str
     module: str
     signature: Dict[str, Any]
     docstring: Optional[str] = None
-    source_location: Optional[str] = None
-    ast_node: Optional[ast.AST] = None
-    
-    def __hash__(self):
-        return hash((self.name, self.module))
+    language: str = "python"  # "python" or "javascript"
 
 
 @dataclass
 class APIDiff:
-    """Represents a detected difference between two API versions."""
+    """Represents a difference between API versions."""
     change_type: ChangeType
+    description: str
+    confidence: float
     old_entity: Optional[APIEntity] = None
     new_entity: Optional[APIEntity] = None
-    description: str = ""
-    confidence: float = 1.0
-    impact_analysis: Dict[str, Any] = field(default_factory=dict)
 
 
 class APIDiffAnalyzer:
-    """
-    Advanced API diff analyzer that uses AST parsing to detect structural changes.
-    
-    This is the foundational component that enables automated API migration by:
-    1. Parsing Python code into AST representations
-    2. Extracting API signatures and metadata
-    3. Comparing versions to identify changes
-    4. Generating structured diff information
-    """
-    
-    def __init__(self, include_builtin_apis: bool = False):
-        """
-        Initialize the API Diff Analyzer.
-        
-        Args:
-            include_builtin_apis: Whether to analyze builtin library APIs
-        """
-        self.include_builtin_apis = include_builtin_apis
-        self.builtin_modules = {'requests', 'json', 'os', 'sys', 're', 'datetime'}
-        
-    def analyze_file(self, file_path: str, target_module: Optional[str] = None) -> List[APIEntity]:
-        """
-        Analyze a Python file to extract API entities.
-        
-        Args:
-            file_path: Path to the Python file to analyze
-            target_module: Specific module to focus on (e.g., 'requests')
-            
-        Returns:
-            List of APIEntity objects found in the file
-        """
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                source_code = f.read()
-            return self.analyze_source_code(source_code, target_module)
-        except Exception as e:
-            logger.error(f"Error analyzing file {file_path}: {e}")
+    """Analyzes API differences between source code versions."""
+
+    def __init__(self):
+        """Initialize the analyzer."""
+        pass
+
+    def _detect_language(self, source_code: str) -> str:
+        """Detect the programming language of the source code."""
+        # Simple heuristics
+        if re.search(r'\bfunction\s+\w+\s*\(', source_code) or 'fetch(' in source_code or 'XMLHttpRequest' in source_code:
+            return "javascript"
+        elif re.search(r'\bdef\s+\w+\s*\(', source_code) or 'import ' in source_code:
+            return "python"
+        else:
+            return "unknown"
+
+    def analyze_source_code(self, source_code: str, module_name: str = "unknown") -> List[APIEntity]:
+        """Analyze source code and extract API entities."""
+        language = self._detect_language(source_code)
+
+        if language == "python":
+            return self._analyze_python_code(source_code, module_name)
+        elif language == "javascript":
+            return self._analyze_javascript_code(source_code, module_name)
+        else:
             return []
-    
-    def analyze_source_code(self, source_code: str, target_module: Optional[str] = None) -> List[APIEntity]:
-        """
-        Analyze Python source code to extract API entities.
-        
-        Args:
-            source_code: Python source code to analyze
-            target_module: Specific module to focus on
-            
-        Returns:
-            List of APIEntity objects found in the source
-        """
+
+    def _analyze_python_code(self, source_code: str, module_name: str) -> List[APIEntity]:
+        """Analyze Python source code using AST."""
+        entities = []
         try:
             tree = ast.parse(source_code)
-            entities = []
-            
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef):
                     entity = self._extract_function_entity(node, source_code)
-                    if self._should_include_entity(entity, target_module):
+                    if entity:
                         entities.append(entity)
-                elif isinstance(node, ast.ClassDef):
-                    for child in node.body:
-                        if isinstance(child, ast.FunctionDef):
-                            method_entity = self._extract_method_entity(child, node.name, source_code)
-                            if self._should_include_entity(method_entity, target_module):
-                                entities.append(method_entity)
-            
-            return entities
-        except Exception as e:
-            logger.error(f"Error parsing source code: {e}")
-            return []
-    
-    def compare_versions(self, old_entities: List[APIEntity], new_entities: List[APIEntity]) -> List[APIDiff]:
-        """
-        Compare two sets of API entities to detect changes.
-        
-        Args:
-            old_entities: API entities from the old version
-            new_entities: API entities from the new version
-            
-        Returns:
-            List of detected differences
-        """
-        old_dict = {self._entity_key(entity): entity for entity in old_entities}
-        new_dict = {self._entity_key(entity): entity for entity in new_entities}
-        
-        diffs = []
-        
-        # Find removed/added entities
-        for key in old_dict:
-            if key not in new_dict:
-                # Check if this old key has a similar new key (renamed)
-                has_similar = any(self._calculate_similarity(key, new_key) > 0.8 for new_key in new_dict)
-                if not has_similar:
-                    diffs.append(APIDiff(
-                        change_type=ChangeType.METHOD_DEPRECATED,
-                        old_entity=old_dict[key],
-                        description=f"API entity {key} was removed or deprecated"
-                    ))
-        
-        for key in new_dict:
-            if key not in old_dict:
-                # Check if it's a new API or renamed version
-                similar_key = self._find_similar_entity(key, old_dict)
-                if similar_key:
-                    diffs.append(APIDiff(
-                        change_type=ChangeType.SIGNATURE_CHANGED,
-                        old_entity=old_dict[similar_key],
-                        new_entity=new_dict[key],
-                        description=f"API entity renamed from {similar_key} to {key}"
-                    ))
-                else:
-                    diffs.append(APIDiff(
-                        change_type=ChangeType.SIGNATURE_CHANGED,
-                        new_entity=new_dict[key],
-                        description=f"New API entity {key} was added"
-                    ))
-        
-        # Find modified entities
-        for key in old_dict:
-            if key in new_dict:
-                old_entity = old_dict[key]
-                new_entity = new_dict[key]
-                signature_diff = self._compare_signatures(old_entity, new_entity)
-                if signature_diff:
-                    diffs.append(APIDiff(
-                        change_type=ChangeType.SIGNATURE_CHANGED,
-                        old_entity=old_entity,
-                        new_entity=new_entity,
-                        description=f"Signature changed for {key}",
-                        impact_analysis=signature_diff
-                    ))
-        
-        return diffs
-    
-    def extract_api_usage(self, source_code: str, target_module: str) -> List[Dict[str, Any]]:
-        """
-        Extract API usage patterns from source code.
-        
-        Args:
-            source_code: Python source code to analyze
-            target_module: Module to analyze usage for (e.g., 'requests')
-            
-        Returns:
-            List of API usage patterns found
-        """
-        try:
-            tree = ast.parse(source_code)
-            usages = []
-            
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    usage = self._extract_call_usage(node, source_code, target_module)
-                    if usage:
-                        usages.append(usage)
-            
-            return usages
-        except Exception as e:
-            logger.error(f"Error extracting API usage: {e}")
-            return []
-    
-    def _extract_function_entity(self, node: ast.FunctionDef, source_code: str) -> APIEntity:
-        """Extract function entity from AST node."""
-        signature = self._extract_signature(node)
-        
+        except SyntaxError:
+            # If AST parsing fails, try regex fallback
+            entities = self._analyze_python_with_regex(source_code, module_name)
+        return entities
+
+    def _analyze_javascript_code(self, source_code: str, module_name: str) -> List[APIEntity]:
+        """Analyze JavaScript source code using regex patterns."""
+        entities = []
+        found_names = set()
+
+        # Pattern for async functions: async function name(params)
+        async_func_pattern = r'async\s+function\s+(\w+)\s*\(([^)]*)\)'
+        for match in re.finditer(async_func_pattern, source_code):
+            name = match.group(1)
+            if name in found_names:
+                continue
+            found_names.add(name)
+            params_str = match.group(2)
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+
+            entity = APIEntity(
+                name=name,
+                module=module_name,
+                signature={'args': [{'name': p, 'type': 'unknown'} for p in params]},
+                language="javascript"
+            )
+            entities.append(entity)
+
+        # Pattern for regular function declarations: function name(params)
+        func_pattern = r'(?<!async\s)function\s+(\w+)\s*\(([^)]*)\)'
+        for match in re.finditer(func_pattern, source_code):
+            name = match.group(1)
+            if name in found_names:
+                continue
+            found_names.add(name)
+            params_str = match.group(2)
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+
+            entity = APIEntity(
+                name=name,
+                module=module_name,
+                signature={'args': [{'name': p, 'type': 'unknown'} for p in params]},
+                language="javascript"
+            )
+            entities.append(entity)
+
+        # Pattern for arrow functions: const name = (params) => or async (params) =>
+        arrow_pattern = r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:\(([^)]*)\)|([^=>\s]+))\s*=>'
+        for match in re.finditer(arrow_pattern, source_code):
+            name = match.group(1)
+            if name in found_names:
+                continue
+            found_names.add(name)
+            params_str = match.group(2) if match.group(2) else ""
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+
+            entity = APIEntity(
+                name=name,
+                module=module_name,
+                signature={'args': [{'name': p, 'type': 'unknown'} for p in params]},
+                language="javascript"
+            )
+            entities.append(entity)
+
+        return entities
+
+    def _analyze_python_with_regex(self, source_code: str, module_name: str) -> List[APIEntity]:
+        """Fallback analysis for Python using regex."""
+        entities = []
+        func_pattern = r'def\s+(\w+)\s*\(([^)]*)\):'
+        for match in re.finditer(func_pattern, source_code):
+            name = match.group(1)
+            params_str = match.group(2)
+            params = [p.strip().split('=')[0].strip() for p in params_str.split(',') if p.strip() and p.strip() != 'self']
+
+            entity = APIEntity(
+                name=name,
+                module=module_name,
+                signature={'args': [{'name': p, 'type': 'unknown'} for p in params]},
+                language="python"
+            )
+            entities.append(entity)
+        return entities
+
+    def _extract_function_entity(self, node: ast.FunctionDef, source_code: str) -> Optional[APIEntity]:
+        """Extract API entity from AST FunctionDef node."""
+        # Get function signature
+        args = []
+        for arg in node.args.args:
+            arg_info = {'name': arg.arg}
+            if arg.annotation:
+                arg_info['type'] = ast.unparse(arg.annotation) if hasattr(ast, 'unparse') else str(arg.annotation)
+            else:
+                arg_info['type'] = 'unknown'
+            args.append(arg_info)
+
+        # Get docstring
+        docstring = None
+        if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Str):
+            docstring = node.body[0].value.s
+
         return APIEntity(
             name=node.name,
-            module="__main__",  # Will be set by caller if needed
-            signature=signature,
-            docstring=ast.get_docstring(node),
-            source_location=self._get_source_location(node, source_code),
-            ast_node=node
+            module="unknown",  # Would need to be passed in
+            signature={'args': args},
+            docstring=docstring,
+            language="python"
         )
-    
-    def _extract_method_entity(self, node: ast.FunctionDef, class_name: str, source_code: str) -> APIEntity:
-        """Extract method entity from AST node."""
-        signature = self._extract_signature(node)
-        
-        return APIEntity(
-            name=f"{class_name}.{node.name}",
-            module="__main__",  # Will be set by caller if needed
-            signature=signature,
-            docstring=ast.get_docstring(node),
-            source_location=self._get_source_location(node, source_code),
-            ast_node=node
-        )
-    
-    def _extract_signature(self, node: ast.FunctionDef) -> Dict[str, Any]:
-        """Extract function/method signature information."""
-        signature = {
-            'args': [],
-            'defaults': [],
-            'vararg': None,
-            'kwarg': None,
-            'returns': None,
-            'is_async': isinstance(node, ast.AsyncFunctionDef)
-        }
-        
-        # Extract positional arguments
-        for arg in node.args.args:
-            signature['args'].append({
-                'name': arg.arg,
-                'annotation': ast.unparse(arg.annotation) if arg.annotation else None
-            })
-        
-        # Extract default values
-        for default in node.args.defaults:
-            signature['defaults'].append(ast.unparse(default))
-        
-        # Extract vararg and kwarg
-        if node.args.vararg:
-            signature['vararg'] = {
-                'name': node.args.vararg.arg,
-                'annotation': ast.unparse(node.args.vararg.annotation) if node.args.vararg.annotation else None
-            }
-        
-        if node.args.kwarg:
-            signature['kwarg'] = {
-                'name': node.args.kwarg.arg,
-                'annotation': ast.unparse(node.args.kwarg.annotation) if node.args.kwarg.annotation else None
-            }
-        
-        # Extract return annotation
-        if node.returns:
-            signature['returns'] = ast.unparse(node.returns)
-        
-        return signature
-    
-    def _extract_call_usage(self, node: ast.Call, source_code: str, target_module: str) -> Optional[Dict[str, Any]]:
-        """Extract API call usage from AST node."""
-        # Check if this is a call to the target module
-        if isinstance(node.func, ast.Attribute):
-            # Handle module.method() calls
-            if isinstance(node.func.value, ast.Name):
-                module_name = node.func.value.id
-                if target_module in module_name.lower():
-                    return self._analyze_call_node(node, source_code, f"{module_name}.{node.func.attr}")
-        elif isinstance(node.func, ast.Name):
-            # Handle function() calls - check imports
-            func_name = node.func.id
-            if target_module.lower() in func_name.lower():
-                return self._analyze_call_node(node, source_code, func_name)
-        
-        return None
-    
-    def _analyze_call_node(self, node: ast.Call, source_code: str, api_name: str) -> Dict[str, Any]:
-        """Analyze an API call node."""
-        usage = {
-            'api_name': api_name,
-            'arguments': [],
-            'keyword_arguments': {},
-            'source_location': self._get_source_location(node, source_code)
-        }
 
-        # Extract positional arguments
-        for arg in node.args:
-            try:
-                usage['arguments'].append(ast.unparse(arg))
-            except Exception:
-                usage['arguments'].append(str(arg))
+    def analyze_file(self, file_path: str) -> List[APIEntity]:
+        """Analyze a file and extract API entities."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                source_code = f.read()
+            module_name = Path(file_path).stem
+            return self.analyze_source_code(source_code, module_name)
+        except Exception:
+            return []
 
-        # Extract keyword arguments
-        for keyword in node.keywords:
-            try:
-                usage['keyword_arguments'][keyword.arg] = ast.unparse(keyword.value)
-            except Exception:
-                usage['keyword_arguments'][keyword.arg] = str(keyword.value)
+    def extract_api_usage(self, source_code: str, api_name: str) -> List[Dict[str, Any]]:
+        """Extract API usage patterns from source code."""
+        usages = []
 
-        return usage
-    
+        if self._detect_language(source_code) == "javascript":
+            return self._extract_js_api_usage(source_code, api_name)
+        else:
+            return self._extract_python_api_usage(source_code, api_name)
+
+    def _extract_js_api_usage(self, source_code: str, api_name: str) -> List[Dict[str, Any]]:
+        """Extract JavaScript API usage."""
+        usages = []
+
+        # Look for fetch calls
+        if api_name == "fetch":
+            fetch_pattern = r'fetch\s*\(\s*["\'`]([^"\'`]+)["\'`]\s*,\s*\{([^}]+)\}'
+            for match in re.finditer(fetch_pattern, source_code, re.DOTALL):
+                url = match.group(1)
+                options = match.group(2)
+
+                usage = {
+                    'api_name': 'fetch',
+                    'url': url,
+                    'method': 'GET',  # default
+                    'keyword_arguments': {}
+                }
+
+                # Extract method
+                method_match = re.search(r'method\s*:\s*["\'`]([^"\'`]+)["\'`]', options)
+                if method_match:
+                    usage['method'] = method_match.group(1)
+
+                # Extract timeout
+                timeout_match = re.search(r'timeout\s*:\s*(\d+)', options)
+                if timeout_match:
+                    usage['keyword_arguments']['timeout'] = timeout_match.group(1)
+
+                usages.append(usage)
+
+        return usages
+
+    def _extract_python_api_usage(self, source_code: str, api_name: str) -> List[Dict[str, Any]]:
+        """Extract Python API usage."""
+        usages = []
+
+        # Look for requests calls
+        if api_name == "requests":
+            pattern = rf'{api_name}\.(\w+)\s*\(\s*["\']([^"\']+)["\'](?:\s*,\s*([^)]+))?\s*\)'
+            for match in re.finditer(pattern, source_code):
+                method = match.group(1)
+                url = match.group(2)
+                kwargs_str = match.group(3) if match.group(3) else ""
+
+                usage = {
+                    'api_name': f'requests.{method}',
+                    'url': url,
+                    'keyword_arguments': {}
+                }
+
+                # Extract timeout
+                timeout_match = re.search(r'timeout\s*=\s*(\d+)', kwargs_str)
+                if timeout_match:
+                    usage['keyword_arguments']['timeout'] = timeout_match.group(1)
+
+                usages.append(usage)
+
+        return usages
+
+    def compare_versions(self, old_entities: List[APIEntity], new_entities: List[APIEntity]) -> List[APIDiff]:
+        """Compare two versions of API entities."""
+        diffs = []
+        old_dict = {self._entity_key(e): e for e in old_entities}
+        new_dict = {self._entity_key(e): e for e in new_entities}
+
+        # Find added functions
+        for key, new_entity in new_dict.items():
+            if key not in old_dict:
+                diffs.append(APIDiff(
+                    change_type=ChangeType.FUNCTION_ADDED,
+                    description=f"Function {new_entity.name} was added",
+                    confidence=1.0,
+                    new_entity=new_entity
+                ))
+
+        # Find removed functions
+        for key, old_entity in old_dict.items():
+            if key not in new_dict:
+                diffs.append(APIDiff(
+                    change_type=ChangeType.FUNCTION_REMOVED,
+                    description=f"Function {old_entity.name} was removed",
+                    confidence=1.0,
+                    old_entity=old_entity
+                ))
+
+        # Find changed functions
+        for key in old_dict.keys() & new_dict.keys():
+            old_entity = old_dict[key]
+            new_entity = new_dict[key]
+
+            signature_changes = self._compare_signatures(old_entity, new_entity)
+            if signature_changes['overall_change']:
+                diffs.append(APIDiff(
+                    change_type=ChangeType.SIGNATURE_CHANGED,
+                    description=f"Signature of {old_entity.name} changed",
+                    confidence=0.9,
+                    old_entity=old_entity,
+                    new_entity=new_entity
+                ))
+
+        return diffs
+
     def _compare_signatures(self, old_entity: APIEntity, new_entity: APIEntity) -> Dict[str, Any]:
-        """Compare two API entity signatures."""
-        old_sig = old_entity.signature
-        new_sig = new_entity.signature
-        
+        """Compare function signatures."""
+        old_args = old_entity.signature.get('args', [])
+        new_args = new_entity.signature.get('args', [])
+
         changes = {
-            'parameter_changes': [],
-            'return_type_changed': False,
-            'overall_change': False
+            'overall_change': False,
+            'parameter_changes': []
         }
-        
-        # Compare argument counts
-        old_args = len(old_sig['args'])
-        new_args = len(new_sig['args'])
-        
-        if old_args != new_args:
+
+        if len(old_args) != len(new_args):
             changes['overall_change'] = True
             changes['parameter_changes'].append({
                 'type': 'count_change',
-                'old_count': old_args,
-                'new_count': new_args
+                'old_count': len(old_args),
+                'new_count': len(new_args)
             })
-        
-        # Compare individual parameters
-        max_args = max(old_args, new_args)
-        for i in range(max_args):
-            old_param = old_sig['args'][i] if i < old_args else None
-            new_param = new_sig['args'][i] if i < new_args else None
 
-            if old_param is not None and new_param is not None and old_param != new_param:
-                changes['parameter_changes'].append({
-                    'type': 'parameter_change',
-                    'index': i,
-                    'old': old_param,
-                    'new': new_param
-                })
-        
-        # Compare return types
-        if old_sig['returns'] != new_sig['returns']:
-            changes['return_type_changed'] = True
-            changes['overall_change'] = True
-        
         return changes
-    
+
     def _entity_key(self, entity: APIEntity) -> str:
         """Generate a unique key for an API entity."""
         return f"{entity.module}.{entity.name}"
-    
-    def _find_similar_entity(self, key: str, entity_dict: Dict[str, APIEntity]) -> Optional[str]:
-        """Find a similar entity name using fuzzy matching."""
-        # Simple similarity check - can be enhanced with more sophisticated algorithms
-        for existing_key in entity_dict:
-            if self._calculate_similarity(key, existing_key) > 0.8:
-                return existing_key
-        return None
-    
+
     def _calculate_similarity(self, str1: str, str2: str) -> float:
-        """Calculate similarity between two strings."""
-        # Simple Levenshtein-like distance calculation
-        if str1 == str2:
-            return 1.0
-        
-        len1, len2 = len(str1), len(str2)
-        if len1 == 0 or len2 == 0:
-            return 0.0
-        
-        # Create a distance matrix
-        matrix = [[0] * (len2 + 1) for _ in range(len1 + 1)]
-        
-        for i in range(len1 + 1):
-            matrix[i][0] = i
-        for j in range(len2 + 1):
-            matrix[0][j] = j
-        
-        for i in range(1, len1 + 1):
-            for j in range(1, len2 + 1):
-                if str1[i-1] == str2[j-1]:
-                    matrix[i][j] = matrix[i-1][j-1]
-                else:
-                    matrix[i][j] = min(
-                        matrix[i-1][j] + 1,    # deletion
-                        matrix[i][j-1] + 1,    # insertion
-                        matrix[i-1][j-1] + 1   # substitution
-                    )
-        
-        max_len = max(len1, len2)
-        return (max_len - matrix[len1][len2]) / max_len
-    
-    def _should_include_entity(self, entity: APIEntity, target_module: Optional[str]) -> bool:
-        """Check if entity should be included in analysis."""
-        if target_module:
-            return target_module.lower() in entity.name.lower()
-        
-        if self.include_builtin_apis:
-            return True
-        
-        # Exclude common builtin modules unless specifically requested
-        return not any(builtin in entity.module.lower() for builtin in self.builtin_modules)
-    
-    def _get_source_location(self, node: ast.AST, source_code: str) -> str:
-        """Get source location information for an AST node."""
-        try:
-            return f"line {node.lineno}, column {node.col_offset}"
-        except:
-            return "unknown location"
+        """Calculate string similarity using simple ratio."""
+        if not str1 or not str2:
+            return 0.0 if str1 or str2 else 1.0
+
+        # Simple Levenshtein-like similarity
+        import difflib
+        return difflib.SequenceMatcher(None, str1, str2).ratio()
