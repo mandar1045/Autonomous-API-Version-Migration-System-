@@ -46,7 +46,6 @@ class RollbackStrategy(Enum):
 @dataclass
 class TransformationOperation:
     """Represents a single transformation operation."""
-    id: str
     file_path: str
     original_content: str
     transformed_content: str
@@ -56,10 +55,11 @@ class TransformationOperation:
     dependencies: List[str] = field(default_factory=list)
     context: Dict[str, Any] = field(default_factory=dict)
     execution_order: int = 0
-    
+    id: Optional[str] = None
+
     def __post_init__(self):
         """Initialize operation ID if not provided."""
-        if not self.id:
+        if self.id is None:
             self.id = str(uuid.uuid4())
 
 
@@ -618,7 +618,7 @@ class TransformationEngine:
                     other_imports = self._extract_imports(other_op.original_content)
                     
                     # If other_op imports something that might be affected by operation
-                    if any(imp in str(operation.changes) for imp in other_imports):
+                    if any(imp in operation.file_path for imp in other_imports):
                         graph.add_edge(other_op.file_path, operation.file_path)
         
         return graph

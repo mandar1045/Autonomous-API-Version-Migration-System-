@@ -6,7 +6,6 @@ Generates structured representations of API signatures and identifies modificati
 """
 
 import ast
-import astunparse
 import re
 from typing import Dict, List, Set, Optional, Tuple, Any
 from dataclasses import dataclass, field
@@ -144,11 +143,14 @@ class APIDiffAnalyzer:
         # Find removed/added entities
         for key in old_dict:
             if key not in new_dict:
-                diffs.append(APIDiff(
-                    change_type=ChangeType.METHOD_DEPRECATED,
-                    old_entity=old_dict[key],
-                    description=f"API entity {key} was removed or deprecated"
-                ))
+                # Check if this old key has a similar new key (renamed)
+                has_similar = any(self._calculate_similarity(key, new_key) > 0.8 for new_key in new_dict)
+                if not has_similar:
+                    diffs.append(APIDiff(
+                        change_type=ChangeType.METHOD_DEPRECATED,
+                        old_entity=old_dict[key],
+                        description=f"API entity {key} was removed or deprecated"
+                    ))
         
         for key in new_dict:
             if key not in old_dict:
@@ -156,7 +158,7 @@ class APIDiffAnalyzer:
                 similar_key = self._find_similar_entity(key, old_dict)
                 if similar_key:
                     diffs.append(APIDiff(
-                        change_type=ChangeType.PARAMETER_RENAMED,
+                        change_type=ChangeType.SIGNATURE_CHANGED,
                         old_entity=old_dict[similar_key],
                         new_entity=new_dict[key],
                         description=f"API entity renamed from {similar_key} to {key}"
@@ -303,15 +305,21 @@ class APIDiffAnalyzer:
             'keyword_arguments': {},
             'source_location': self._get_source_location(node, source_code)
         }
-        
+
         # Extract positional arguments
         for arg in node.args:
-            usage['arguments'].append(ast.unparse(arg))
-        
+            try:
+                usage['arguments'].append(ast.unparse(arg))
+            except Exception:
+                usage['arguments'].append(str(arg))
+
         # Extract keyword arguments
         for keyword in node.keywords:
-            usage['keyword_arguments'][keyword.arg] = ast.unparse(keyword.value)
-        
+            try:
+                usage['keyword_arguments'][keyword.arg] = ast.unparse(keyword.value)
+            except Exception:
+                usage['keyword_arguments'][keyword.arg] = str(keyword.value)
+
         return usage
     
     def _compare_signatures(self, old_entity: APIEntity, new_entity: APIEntity) -> Dict[str, Any]:
@@ -342,8 +350,8 @@ class APIDiffAnalyzer:
         for i in range(max_args):
             old_param = old_sig['args'][i] if i < old_args else None
             new_param = new_sig['args'][i] if i < new_args else None
-            
-            if old_param != new_param:
+
+            if old_param is not None and new_param is not None and old_param != new_param:
                 changes['parameter_changes'].append({
                     'type': 'parameter_change',
                     'index': i,

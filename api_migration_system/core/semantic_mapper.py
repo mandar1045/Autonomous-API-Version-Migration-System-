@@ -178,8 +178,8 @@ class SemanticMapper:
             TransformationRule(
                 name="requests_timeout_scale",
                 type=TransformationType.PARAMETER_SCALE,
-                pattern="requests\\.(get|post|put|delete)\\(([^)]*timeout=([^,)]+)[^)]*)\\)",
-                replacement=r"requests.\1(\2timeout=\3*1000)",
+                pattern="requests\\.(get|post|put|delete)\\(([^)]* )(timeout=)([^,)]+)([^)]*)\\)",
+                replacement=r"requests.\1(\2\3\4*1000\5)",
                 confidence=0.9,
                 description="Scale timeout parameter from seconds to milliseconds",
                 proof_obligation="Preserves timeout behavior: timeout_seconds * 1000 = timeout_milliseconds"
@@ -187,8 +187,8 @@ class SemanticMapper:
             TransformationRule(
                 name="requests_data_rename",
                 type=TransformationType.PARAMETER_RENAME,
-                pattern="requests\\.(get|post|put)\\(([^)]*data=([^,)]+)[^)]*)\\)",
-                replacement=r"requests.\1(\2json=\3)",
+                pattern="requests\\.(get|post|put)\\(([^)]*)data=([^,)]+)([^)]*)\\)",
+                replacement=r"requests.\1(\2json=\3\4)",
                 confidence=0.7,
                 description="Rename data parameter to json for consistency",
                 proof_obligation="Semantic equivalence: data parameter becomes JSON payload"
@@ -438,19 +438,35 @@ class SemanticMapper:
             'data_flow': context.data_flow
         }
     
+    def _find_containing_function(self, node_lineno: int, tree: ast.AST) -> Optional[ast.FunctionDef]:
+        """Find the containing function node for the given node lineno."""
+        for child in ast.walk(tree):
+            if isinstance(child, ast.FunctionDef):
+                if hasattr(child, 'end_lineno') and child.lineno <= node_lineno <= child.end_lineno:
+                    return child
+        return None
+
     def _infer_variable_types(self, node: ast.AST, source_code: str) -> Dict[str, str]:
         """Infer variable types from AST node."""
+        if not hasattr(node, 'lineno'):
+            return {}
+        tree = ast.parse(source_code)
+        func = self._find_containing_function(node.lineno, tree)
+        if not func:
+            return {}
+
         types = {}
-        
-        # Simple type inference for common cases
-        for child in ast.walk(node):
-            if isinstance(child, ast.Assign):
-                for target in child.targets:
-                    if isinstance(target, ast.Name):
-                        type_annotation = self._infer_single_type(child.value)
-                        if type_annotation:
-                            types[target.id] = type_annotation
-        
+
+        # Collect assignments within the function's body before the node's line
+        for stmt in func.body:
+            for body_node in ast.walk(stmt):
+                if isinstance(body_node, ast.Assign) and hasattr(body_node, 'lineno') and body_node.lineno < node.lineno:
+                    for target in body_node.targets:
+                        if isinstance(target, ast.Name):
+                            type_annotation = self._infer_single_type(body_node.value)
+                            if type_annotation:
+                                types[target.id] = type_annotation
+
         return types
     
     def _infer_single_type(self, value_node: ast.AST) -> Optional[str]:
@@ -501,6 +517,8 @@ class SemanticMapper:
     def _extract_surrounding_code(self, node: ast.AST, source_code: str) -> str:
         """Extract surrounding code context."""
         try:
+            if not hasattr(node, 'lineno'):
+                return ""
             lines = source_code.split('\n')
             start_line = max(0, node.lineno - 3)
             end_line = min(len(lines), node.lineno + 3)
@@ -527,6 +545,8 @@ class SemanticMapper:
     def _get_node_location(self, node: ast.AST) -> str:
         """Get location information for an AST node."""
         try:
+            if not hasattr(node, 'lineno'):
+                return "unknown"
             return f"line {node.lineno}, column {node.col_offset}"
         except:
             return "unknown"
