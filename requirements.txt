@@ -1,0 +1,31 @@
+# Core dependencies for Autonomous API Version Migration System
+# All dependencies use only Python standard library modules
+
+# No external dependencies required - uses built-in Python modules:
+# - ast (built-in)
+# - os (built-in)
+# - sys (built-in)
+# - tempfile (built-in)
+# - shutil (built-in)
+# - json (built-in)
+# - uuid (built-in)
+# - datetime (built-in)
+# - pathlib (built-in)
+# - typing (built-in)
+# - dataclasses (built-in)
+# - enum (built-in)
+# - abc (built-in)
+# - logging (built-in)
+# - re (built-in)
+# - time (built-in)
+# - hashlib (built-in)
+
+# Optional development dependencies (uncomment if needed)
+# pytest>=7.0.0
+# black>=22.0.0
+# flake8>=4.0.0
+# mypy>=0.950
+# coverage>=6.0
+
+# Note: This system is designed to work with Python 3.8+ standard library only
+# for maximum portability and minimal dependencies.
