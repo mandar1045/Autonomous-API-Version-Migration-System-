@@ -4,6 +4,7 @@ Autonomous API Version Migration System
 """
 
 from .core.api_diff_analyzer import APIDiffAnalyzer, APIEntity, APIDiff, ChangeType
+from .core.semantic_mapper import SemanticMapper
 from .core.transformation_engine import TransformationEngine
 
 __version__ = "1.0.0"
@@ -12,5 +13,6 @@ __all__ = [
     'APIEntity',
     'APIDiff',
     'ChangeType',
+    'SemanticMapper',
     'TransformationEngine'
 ]

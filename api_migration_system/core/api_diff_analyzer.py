@@ -33,6 +33,14 @@ class APIEntity:
     docstring: Optional[str] = None
     language: str = "python"  # "python" or "javascript"
 
+    def __hash__(self):
+        return hash((self.name, self.module))
+
+    def __eq__(self, other):
+        if not isinstance(other, APIEntity):
+            return NotImplemented
+        return self.name == other.name and self.module == other.module
+
 
 @dataclass
 class APIDiff:
@@ -78,10 +86,28 @@ class APIDiffAnalyzer:
         try:
             tree = ast.parse(source_code)
             for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef):
-                    entity = self._extract_function_entity(node, source_code)
-                    if entity:
-                        entities.append(entity)
+                if isinstance(node, ast.ClassDef):
+                    # Extract class methods with ClassName.method_name format
+                    for item in node.body:
+                        if isinstance(item, ast.FunctionDef):
+                            entity = self._extract_function_entity(item, source_code)
+                            if entity:
+                                entity.name = f"{node.name}.{item.name}"
+                                entities.append(entity)
+                elif isinstance(node, ast.FunctionDef):
+                    # Skip methods already captured from ClassDef walk
+                    # Check if this function is directly in the module (not in a class)
+                    is_class_method = False
+                    for parent in ast.walk(tree):
+                        if isinstance(parent, ast.ClassDef):
+                            for item in parent.body:
+                                if item is node:
+                                    is_class_method = True
+                                    break
+                    if not is_class_method:
+                        entity = self._extract_function_entity(node, source_code)
+                        if entity:
+                            entities.append(entity)
         except SyntaxError:
             # If AST parsing fails, try regex fallback
             entities = self._analyze_python_with_regex(source_code, module_name)
@@ -246,13 +272,22 @@ class APIDiffAnalyzer:
         """Extract Python API usage."""
         usages = []
 
-        # Look for requests calls
         if api_name == "requests":
-            pattern = rf'{api_name}\.(\w+)\s*\(\s*["\']([^"\']+)["\'](?:\s*,\s*([^)]+))?\s*\)'
-            for match in re.finditer(pattern, source_code):
+            # Broad pattern that handles f-strings and multi-line calls
+            broad_pattern = api_name + r'\.(\w+)\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)'
+            for match in re.finditer(broad_pattern, source_code, re.DOTALL):
                 method = match.group(1)
-                url = match.group(2)
-                kwargs_str = match.group(3) if match.group(3) else ""
+                args_str = match.group(2)
+
+                # Try to extract the URL
+                url = ""
+                url_match = re.search(r"""['\"](?:https?://[^'\"]+)['\"]""", args_str)
+                if url_match:
+                    url = url_match.group(0).strip("'\"")
+                else:
+                    furl_match = re.search(r"""f['\"]([^'\"]*)['\"]""", args_str)
+                    if furl_match:
+                        url = furl_match.group(1)
 
                 usage = {
                     'api_name': f'requests.{method}',
@@ -261,7 +296,7 @@ class APIDiffAnalyzer:
                 }
 
                 # Extract timeout
-                timeout_match = re.search(r'timeout\s*=\s*(\d+)', kwargs_str)
+                timeout_match = re.search(r'timeout\s*=\s*(\d+)', args_str)
                 if timeout_match:
                     usage['keyword_arguments']['timeout'] = timeout_match.group(1)
 
@@ -275,30 +310,15 @@ class APIDiffAnalyzer:
         old_dict = {self._entity_key(e): e for e in old_entities}
         new_dict = {self._entity_key(e): e for e in new_entities}
 
-        # Find added functions
-        for key, new_entity in new_dict.items():
-            if key not in old_dict:
-                diffs.append(APIDiff(
-                    change_type=ChangeType.FUNCTION_ADDED,
-                    description=f"Function {new_entity.name} was added",
-                    confidence=1.0,
-                    new_entity=new_entity
-                ))
+        matched_old = set()
+        matched_new = set()
 
-        # Find removed functions
-        for key, old_entity in old_dict.items():
-            if key not in new_dict:
-                diffs.append(APIDiff(
-                    change_type=ChangeType.FUNCTION_REMOVED,
-                    description=f"Function {old_entity.name} was removed",
-                    confidence=1.0,
-                    old_entity=old_entity
-                ))
-
-        # Find changed functions
+        # Exact-key matches first (same module.name)
         for key in old_dict.keys() & new_dict.keys():
             old_entity = old_dict[key]
             new_entity = new_dict[key]
+            matched_old.add(key)
+            matched_new.add(key)
 
             signature_changes = self._compare_signatures(old_entity, new_entity)
             if signature_changes['overall_change']:
@@ -309,6 +329,48 @@ class APIDiffAnalyzer:
                     old_entity=old_entity,
                     new_entity=new_entity
                 ))
+
+        # Fuzzy matching for unmatched entities (possible renames)
+        unmatched_old = {k: v for k, v in old_dict.items() if k not in matched_old}
+        unmatched_new = {k: v for k, v in new_dict.items() if k not in matched_new}
+
+        for old_key, old_entity in list(unmatched_old.items()):
+            best_match = None
+            best_similarity = 0.0
+            for new_key, new_entity in list(unmatched_new.items()):
+                sim = self._calculate_similarity(old_entity.name, new_entity.name)
+                if sim > best_similarity and sim >= 0.4:
+                    best_similarity = sim
+                    best_match = (new_key, new_entity)
+
+            if best_match:
+                new_key, new_entity = best_match
+                del unmatched_old[old_key]
+                del unmatched_new[new_key]
+                diffs.append(APIDiff(
+                    change_type=ChangeType.SIGNATURE_CHANGED,
+                    description=f"Signature of {old_entity.name} changed (renamed to {new_entity.name})",
+                    confidence=best_similarity,
+                    old_entity=old_entity,
+                    new_entity=new_entity
+                ))
+
+        # Remaining unmatched → added/removed
+        for key, new_entity in unmatched_new.items():
+            diffs.append(APIDiff(
+                change_type=ChangeType.FUNCTION_ADDED,
+                description=f"Function {new_entity.name} was added",
+                confidence=1.0,
+                new_entity=new_entity
+            ))
+
+        for key, old_entity in unmatched_old.items():
+            diffs.append(APIDiff(
+                change_type=ChangeType.FUNCTION_REMOVED,
+                description=f"Function {old_entity.name} was removed",
+                confidence=1.0,
+                old_entity=old_entity
+            ))
 
         return diffs
 

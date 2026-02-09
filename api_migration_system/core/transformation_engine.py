@@ -15,8 +15,10 @@ from enum import Enum
 from dataclasses import dataclass, field
 import subprocess
 import tempfile
+import re
 
 from .api_diff_analyzer import APIDiffAnalyzer
+from .semantic_mapper import SemanticMapper
 
 
 class TransformationStatus(Enum):
@@ -31,6 +33,7 @@ class TransformationStatus(Enum):
 class RollbackStrategy(Enum):
     """Strategies for rolling back transformations."""
     FULL_ROLLBACK = "full_rollback"
+    PARTIAL_ROLLBACK = "partial_rollback"
     MANUAL_VERIFICATION = "manual_verification"
     SELECTIVE_ROLLBACK = "selective_rollback"
 
@@ -121,6 +124,7 @@ class DependencyGraph:
             if vertex not in visited:
                 visit(vertex)
 
+        result.reverse()
         return result
 
     def has_cycle(self) -> bool:
@@ -327,6 +331,7 @@ class TransformationEngine:
     def __init__(self, workspace_dir: Optional[str] = None):
         """Initialize the transformation engine."""
         self.analyzer = APIDiffAnalyzer()
+        self.mapper = SemanticMapper()
         self.projects: Dict[str, TransformationProject] = {}
         self.workspace_dir = workspace_dir or tempfile.gettempdir()
         self.test_runner = TestRunner()
@@ -370,14 +375,42 @@ class TransformationEngine:
                         total_files += 1
             complexity_score = len(api_entities) * 10
 
-        # Calculate transformation opportunities (simplified)
+        # Calculate transformation opportunities
         transformation_opportunities = []
-        for entity in api_entities:
-            if entity.language == "javascript":
-                transformation_opportunities.append({
-                    'entity': entity.name,
-                    'type': 'js_api_migration'
-                })
+        if os.path.isdir(source_path):
+            for root, dirs, files in os.walk(source_path):
+                for file in files:
+                    if file.endswith(('.py', '.js')):
+                        file_path = os.path.join(root, file)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                        except Exception:
+                            continue
+                        # Check for transformation-worthy patterns
+                        has_requests = bool(re.search(r'requests\.\w+\s*\(', content))
+                        has_timeout = bool(re.search(r'timeout=\d+', content))
+                        has_data_param = bool(re.search(r'data=json\.dumps\(', content))
+                        if has_requests or has_timeout or has_data_param:
+                            transformation_opportunities.append({
+                                'file': file,
+                                'entity': file,
+                                'type': 'api_migration',
+                            })
+        elif os.path.isfile(source_path):
+            try:
+                with open(source_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                has_requests = bool(re.search(r'requests\.\w+\s*\(', content))
+                has_timeout = bool(re.search(r'timeout=\d+', content))
+                if has_requests or has_timeout:
+                    transformation_opportunities.append({
+                        'file': os.path.basename(source_path),
+                        'entity': os.path.basename(source_path),
+                        'type': 'api_migration',
+                    })
+            except Exception:
+                pass
 
         # Store entities in project metadata
         project.metadata['api_entities'] = api_entities
@@ -398,24 +431,59 @@ class TransformationEngine:
         project = self.projects[project_id]
         operations = []
 
-        # Read the source content
+        source_files: List[tuple] = []  # (abs_path, relative_name)
+
         if os.path.isfile(project.source_path):
-            with open(project.source_path, 'r') as f:
-                source_content = f.read()
-        else:
-            # For directory, we would need to handle multiple files, but for now assume single file
-            source_content = ""
+            source_files.append(
+                (project.source_path, os.path.basename(project.source_path))
+            )
+        elif os.path.isdir(project.source_path):
+            for root, _dirs, files in os.walk(project.source_path):
+                for fname in files:
+                    if fname.endswith(('.py', '.js')):
+                        abs_path = os.path.join(root, fname)
+                        rel_path = os.path.relpath(abs_path, project.source_path)
+                        source_files.append((abs_path, rel_path))
 
-        # Apply transformations to create transformed content
-        transformed_content = self._apply_api_migrations(source_content)
+        for abs_path, rel_name in source_files:
+            try:
+                with open(abs_path, 'r', encoding='utf-8') as f:
+                    source_content = f.read()
+            except Exception:
+                continue
 
-        operation = TransformationOperation(
-            file_path=project.source_path,
-            original_content=source_content,
-            transformed_content=transformed_content,
-            changes=[{'type': 'api_migration', 'description': 'Migrate API calls to new version'}]
-        )
-        operations.append(operation)
+            transformed_content = self._apply_api_migrations(source_content)
+
+            # Collect semantic matches for proof generation
+            matches = self.mapper.analyze_code(source_content)
+
+            changes = []
+            for match in matches:
+                changes.append({
+                    'type': match.rule.type.value,
+                    'description': match.rule.description or f"Apply {match.rule.name}",
+                    'matched': match.matched_code,
+                    'replacement': match.replacement_code,
+                })
+
+            if not changes:
+                changes = [{'type': 'api_migration', 'description': 'Migrate API calls to new version'}]
+
+            # Generate proof certificate
+            proof_cert = None
+            if matches:
+                proof_cert = self.mapper.generate_proof_certificate(
+                    source_content, transformed_content, matches
+                )
+
+            operation = TransformationOperation(
+                file_path=rel_name,
+                original_content=source_content,
+                transformed_content=transformed_content,
+                changes=changes,
+                proof_certificate=proof_cert,
+            )
+            operations.append(operation)
 
         project.operations = operations
         return operations
@@ -460,16 +528,22 @@ class TransformationEngine:
         project = self.projects[project_id]
         operations = project.operations
 
-        results = {
-            'successful_operations': len(operations),
+        successful = 0
+        failed = 0
+
+        results: Dict[str, Any] = {
+            'project_id': project_id,
+            'total_operations': len(operations),
+            'successful_operations': 0,
             'failed_operations': 0,
             'backup_path': None,
-            'dry_run': dry_run
+            'dry_run': dry_run,
         }
 
         if not dry_run and operations:
-            # Create backup
             target_path = project.target_path
+
+            # Create backup of existing target
             backup_path = f"{target_path}.backup"
             if os.path.exists(target_path):
                 if os.path.isfile(target_path):
@@ -478,10 +552,40 @@ class TransformationEngine:
                     shutil.copytree(target_path, backup_path, dirs_exist_ok=True)
                 results['backup_path'] = backup_path
 
-            # Write transformed content to target
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            with open(target_path, 'w') as f:
-                f.write(operations[0].transformed_content)
+            os.makedirs(target_path, exist_ok=True)
+
+            for operation in operations:
+                try:
+                    out_path = os.path.join(target_path, operation.file_path)
+                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                    with open(out_path, 'w', encoding='utf-8') as f:
+                        f.write(operation.transformed_content)
+                    operation.status = TransformationStatus.COMPLETED
+                    successful += 1
+                except Exception as e:
+                    operation.status = TransformationStatus.FAILED
+                    operation.error_message = str(e)
+                    failed += 1
+
+            # Copy non-code files from source to target
+            if os.path.isdir(project.source_path):
+                for root, _dirs, files in os.walk(project.source_path):
+                    for fname in files:
+                        if not fname.endswith(('.py', '.js')):
+                            src_file = os.path.join(root, fname)
+                            rel = os.path.relpath(src_file, project.source_path)
+                            dst_file = os.path.join(target_path, rel)
+                            os.makedirs(os.path.dirname(dst_file), exist_ok=True)
+                            if not os.path.exists(dst_file):
+                                shutil.copy2(src_file, dst_file)
+
+            project.completed_at = datetime.now()
+        else:
+            # Dry-run — count all as successful
+            successful = len(operations)
+
+        results['successful_operations'] = successful
+        results['failed_operations'] = failed
 
         return results
 
@@ -584,8 +688,15 @@ class TransformationEngine:
                 else:
                     shutil.rmtree(project.target_path)
             return True
+        elif strategy == RollbackStrategy.PARTIAL_ROLLBACK:
+            # Remove only the files whose operations are marked as failed
+            for op in project.operations:
+                if op.status == TransformationStatus.FAILED or op.status == "failed":
+                    target_file = os.path.join(project.target_path, op.file_path)
+                    if os.path.exists(target_file):
+                        os.remove(target_file)
+            return True
         else:
-            # Simplified - other strategies not implemented
             return True
 
     def export_project_report(self, project_id: str, file_path: str) -> str:
