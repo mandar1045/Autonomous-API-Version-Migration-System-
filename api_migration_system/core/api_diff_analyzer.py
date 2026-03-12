@@ -7,7 +7,7 @@ of source code, supporting both Python and JavaScript.
 
 import ast
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
@@ -32,6 +32,7 @@ class APIEntity:
     signature: Dict[str, Any]
     docstring: Optional[str] = None
     language: str = "python"  # "python" or "javascript"
+    ast_node: Optional[ast.AST] = field(default=None, compare=False, hash=False)
 
     def __hash__(self):
         return hash((self.name, self.module))
@@ -214,7 +215,8 @@ class APIDiffAnalyzer:
             module="unknown",  # Would need to be passed in
             signature={'args': args},
             docstring=docstring,
-            language="python"
+            language="python",
+            ast_node=node
         )
 
     def analyze_file(self, file_path: str) -> List[APIEntity]:
@@ -338,7 +340,17 @@ class APIDiffAnalyzer:
             best_match = None
             best_similarity = 0.0
             for new_key, new_entity in list(unmatched_new.items()):
-                sim = self._calculate_similarity(old_entity.name, new_entity.name)
+                # Baseline string similarity
+                str_sim = self._calculate_similarity(old_entity.name, new_entity.name)
+                
+                # Structural similarity (if both are Python nodes)
+                struct_sim = 0.0
+                if old_entity.language == 'python' and new_entity.language == 'python':
+                    struct_sim = self._calculate_structural_similarity(old_entity.ast_node, new_entity.ast_node)
+                
+                # Blend scores: 40% name, 60% structure (if structural is available), else just name
+                sim = (0.4 * str_sim + 0.6 * struct_sim) if struct_sim > 0 else str_sim
+
                 if sim > best_similarity and sim >= 0.4:
                     best_similarity = sim
                     best_match = (new_key, new_entity)
@@ -406,3 +418,31 @@ class APIDiffAnalyzer:
         # Simple Levenshtein-like similarity
         import difflib
         return difflib.SequenceMatcher(None, str1, str2).ratio()
+
+    def _calculate_structural_similarity(self, node1: Optional[ast.AST], node2: Optional[ast.AST]) -> float:
+        """Calculate structural similarity between two AST nodes based on statement counts."""
+        if not node1 or not node2:
+            return 0.0
+            
+        from collections import Counter
+        def get_profile(node):
+            counter = Counter()
+            for child in ast.walk(node):
+                # We skip certain common nodes like Load, Store, formatting
+                if isinstance(child, (ast.Load, ast.Store, ast.alias, ast.Name)):
+                    continue
+                counter[type(child).__name__] += 1
+            return counter
+            
+        p1 = get_profile(node1)
+        p2 = get_profile(node2)
+        
+        all_keys = set(p1.keys()) | set(p2.keys())
+        if not all_keys:
+            return 1.0
+            
+        # Cosine similarity approximation or simple intersection over union
+        intersection = sum(min(p1[k], p2[k]) for k in all_keys)
+        union = sum(max(p1[k], p2[k]) for k in all_keys)
+        
+        return intersection / union if union > 0 else 0.0
