@@ -13,7 +13,7 @@ import hashlib
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Dict, Any, Optional
 
@@ -115,7 +115,7 @@ class TransformationPattern(ABC):
 class ParameterScalePattern(TransformationPattern):
     """Scale a keyword argument's numeric value by a constant factor.
 
-    Example: ``timeout=30`` → ``timeout=30*1000``
+    Example: ``timeout=30*1000`` → ``timeout=30*1000``
     """
 
     def __init__(self, parameter_name: str, scale_factor: int):
@@ -126,14 +126,14 @@ class ParameterScalePattern(TransformationPattern):
         if not isinstance(node, ast.Call):
             return False
         for kw in node.keywords:
-            if kw.arg == self.parameter_name and isinstance(kw.value, (ast.Constant, ast.Num)):
+            if kw.arg == self.parameter_name and isinstance(kw.value, ast.Constant):
                 return True
         return False
 
     def transform(self, node: ast.AST, context: SemanticContext) -> ast.AST:
         node = copy.deepcopy(node)
         for kw in node.keywords:
-            if kw.arg == self.parameter_name and isinstance(kw.value, (ast.Constant, ast.Num)):
+            if kw.arg == self.parameter_name and isinstance(kw.value, ast.Constant):
                 original_value = kw.value
                 kw.value = ast.BinOp(
                     left=original_value,
@@ -245,7 +245,7 @@ class SemanticMapper:
 
         certificate: Dict[str, Any] = {
             "transformation_id": str(uuid.uuid4()),
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "original_code_hash": hashlib.sha256(original_code.encode()).hexdigest(),
             "transformed_code_hash": hashlib.sha256(transformed_code.encode()).hexdigest(),
             "verification_status": "verified" if avg_confidence >= 0.5 else "unverified",
@@ -314,7 +314,7 @@ class SemanticMapper:
         timeout_rule = TransformationRule(
             name="requests_timeout_scale",
             type=TransformationType.PARAMETER_SCALE,
-            pattern=r"timeout=(\d+)(?=\D|$)",
+            pattern=r"timeout=(\d+)(?!\s*\*\s*1000)(?=\D|$)",
             replacement=r"timeout=\1*1000",
             confidence=0.9,
             description="Scale timeout from seconds to milliseconds",
@@ -333,7 +333,7 @@ class SemanticMapper:
             confidence=0.85,
             description="Rename data parameter to json for requests",
             proof_obligation=(
-                "Parameter rename preserves payload semantics: data=json.dumps(x) ≡ json=x"
+                "Parameter rename preserves payload semantics: json=x ≡ json=x"
             ),
         )
         self.add_rule(rename_rule)

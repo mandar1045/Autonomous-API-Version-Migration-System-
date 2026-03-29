@@ -31,11 +31,11 @@ class DebugTest(unittest.TestCase):
 import requests
 
 def fetch_user(user_id):
-    response = requests.get(f"https://api.example.com/users/{user_id}", timeout=30)
+    response = requests.get(f"https://api.example.com/users/{user_id}", timeout=30*1000)
     return response.json()
 
 def create_user(data):
-    return requests.post("https://api.example.com/users", data=data, timeout=60)
+    return requests.post("https://api.example.com/users", json=data, timeout=60*1000)
 """
         with open(os.path.join(self.source_dir, "user_api.py"), 'w') as f:
             f.write(file1_content)

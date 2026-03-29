@@ -27,7 +27,7 @@ def create_user(user_data: Dict[str, Any]) -> Dict[str, Any]:
     url = "https://api.example.com/users"
     
     # Old API: using 'data' parameter
-    response = requests.post(url, json=json.dumps(user_data), timeout=60)
+    response = requests.post(url, json=json.dumps(user_data), timeout=60*1000)
     
     if response.status_code == 201:
         return response.json()
@@ -40,7 +40,7 @@ def update_user(user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
     url = f"https://api.example.com/users/{user_id}"
     
     # Old API: PUT with data parameter
-    response = requests.put(url, json=json.dumps(updates), timeout=45)
+    response = requests.put(url, json=json.dumps(updates), timeout=45*1000)
     
     if response.status_code == 200:
         return response.json()
@@ -76,8 +76,8 @@ def batch_operations(operations: list) -> list:
                 # Old API: POST with data parameter
                 response = requests.post(
                     operation['url'], 
-                    data=json.dumps(operation['payload']),
-                    timeout=60
+                    json=operation['payload'],
+                    timeout=60*1000
                 )
                 results.append({
                     'id': operation['id'],
@@ -99,7 +99,7 @@ class APIClient:
     
     def __init__(self, base_url: str, timeout: int = 30):
         self.base_url = base_url
-        self.timeout = timeout
+        self.timeout = timeout * 1000
     
     def get(self, endpoint: str, **kwargs) -> requests.Response:
         """GET request with timeout."""
@@ -109,12 +109,12 @@ class APIClient:
     def post(self, endpoint: str, data: Any = None, **kwargs) -> requests.Response:
         """POST request with data parameter."""
         url = f"{self.base_url}/{endpoint}"
-        return requests.post(url, data=data, timeout=self.timeout, **kwargs)
+        return requests.post(url, json=data, timeout=self.timeout, **kwargs)
     
     def put(self, endpoint: str, data: Any = None, **kwargs) -> requests.Response:
         """PUT request with data parameter."""
         url = f"{self.base_url}/{endpoint}"
-        return requests.put(url, data=data, timeout=self.timeout, **kwargs)
+        return requests.put(url, json=data, timeout=self.timeout, **kwargs)
 
 
 # Example usage

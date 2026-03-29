@@ -11,7 +11,7 @@ def create_post(title, content):
         'title': title,
         'content': content
     }
-    response = requests.post('https://api.example.com/posts', data=data, timeout=60*1000)
+    response = requests.post('https://api.example.com/posts', json=data, timeout=60*1000)
     return response.json()
 
 def update_settings(settings):

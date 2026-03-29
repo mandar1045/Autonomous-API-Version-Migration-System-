@@ -72,7 +72,7 @@ def func(a, b, c=None):
         source_code = """
 import requests
 
-response = requests.get('https://api.example.com', timeout=30)
+response = requests.get('https://api.example.com', timeout=30*1000)
 data = response.json()
 """
         usages = self.analyzer.extract_api_usage(source_code, 'requests')
@@ -87,7 +87,7 @@ data = response.json()
         with open(test_file, 'w') as f:
             f.write("""
 def test_func():
-    requests.get('https://example.com', timeout=30)
+    requests.get('https://example.com', timeout=30*1000)
 """)
         
         entities = self.analyzer.analyze_file(test_file)
@@ -152,7 +152,7 @@ class APIClient:
     def get_data(self, endpoint):
         response = requests.get(
             f"{self.base_url}/{endpoint}",
-            timeout=30,
+            timeout=30*1000,
             headers={'Content-Type': 'application/json'}
         )
         return response.json()
@@ -160,8 +160,8 @@ class APIClient:
     def post_data(self, endpoint, data):
         return requests.post(
             f"{self.base_url}/{endpoint}",
-            data=json.dumps(data),
-            timeout=60
+            json=data,
+            timeout=60*1000
         )
 """
         

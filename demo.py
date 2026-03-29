@@ -134,7 +134,7 @@ def demonstrate_proof_generation(project_id, engine, temp_dir):
         print(f"      📁 Total operations: {summary['total_operations']}")
         print(f"      ✅ Completed: {summary['completed_operations']}")
         print(f"      ❌ Failed: {summary['failed_operations']}")
-        print(f"      🎯 Average confidence: {summary['total_confidence']:.2f}")
+        print(f"      🎯 Average confidence: {summary['average_confidence']:.2f}")
         
         # Show proof certificates for each operation
         print(f"\n   🔐 Proof Certificates:")
@@ -189,8 +189,11 @@ def demonstrate_rollback_capabilities(project_id, engine, temp_dir):
             print("   ✅ Full rollback successful")
             
             # Verify files are removed
-            remaining_files = [f for f in os.listdir(target_dir) if f.endswith('.py')]
-            print(f"   📁 Remaining files after rollback: {len(remaining_files)}")
+            if os.path.exists(target_dir):
+                remaining_files = [f for f in os.listdir(target_dir) if f.endswith('.py')]
+                print(f"   📁 Remaining files after rollback: {len(remaining_files)}")
+            else:
+                print("   📁 Target directory removed after rollback")
             
             # Test manual verification rollback
             print("\n   👤 Testing manual verification rollback...")
@@ -274,8 +277,8 @@ def compare_before_after():
                 print(f"   {i:2d}: {line.strip()}")
         
         print("\n   🔍 Key Changes:")
-        print("      • timeout=30 → timeout=30*1000 (seconds to milliseconds)")
-        print("      • data=json.dumps(data) → json=json.dumps(data)")
+        print("      • timeout=30*1000 → timeout=30*1000 (seconds to milliseconds)")
+        print("      • data=... → json=... for JSON payload migration")
         print("      • Consistent parameter naming across API calls")
         
     except Exception as e:

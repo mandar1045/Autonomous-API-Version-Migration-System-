@@ -66,7 +66,7 @@ class TestSemanticMapper(unittest.TestCase):
         source_code = """
 import requests
 
-response = requests.get('https://example.com', timeout=30)
+response = requests.get('https://example.com', timeout=30*1000)
 """
         
         matches = self.mapper.analyze_code(source_code)
@@ -88,15 +88,15 @@ import requests
 import json
 
 def fetch_data(url):
-    response = requests.get(url, timeout=30, headers={'Auth': 'Bearer token'})
+    response = requests.get(url, timeout=30*1000, headers={'Auth': 'Bearer token'})
     return response.json()
 
 def post_data(url, data):
-    return requests.post(url, data=json.dumps(data), timeout=60)
+    return requests.post(url, json=data, timeout=60*1000)
 
 class APIHandler:
     def get(self, endpoint):
-        return requests.get(f"https://api.com/{endpoint}", timeout=45)
+        return requests.get(f"https://api.com/{endpoint}", timeout=45*1000)
 """
         
         matches = self.mapper.analyze_code(source_code)
@@ -119,7 +119,7 @@ class APIHandler:
     
     def test_apply_transformation(self):
         """Test applying transformations to source code."""
-        source_code = "requests.get('https://example.com', timeout=30)"
+        source_code = "requests.get('https://example.com', timeout=30*1000)"
         
         # Create a simple transformation match
         rule = TransformationRule(
@@ -132,7 +132,7 @@ class APIHandler:
         
         match = TransformationMatch(
             rule=rule,
-            matched_code="timeout=30",
+            matched_code="timeout=30*1000",
             replacement_code="timeout=30*1000",
             confidence=0.9
         )
@@ -144,7 +144,7 @@ class APIHandler:
     
     def test_generate_proof_certificate(self):
         """Test generation of proof certificates."""
-        original_code = "requests.get('https://example.com', timeout=30)"
+        original_code = "requests.get('https://example.com', timeout=30*1000)"
         transformed_code = "requests.get('https://example.com', timeout=30*1000)"
         
         rule = TransformationRule(
@@ -158,7 +158,7 @@ class APIHandler:
         
         match = TransformationMatch(
             rule=rule,
-            matched_code="timeout=30",
+            matched_code="timeout=30*1000",
             replacement_code="timeout=30*1000",
             confidence=0.9
         )
@@ -187,7 +187,7 @@ import json
 def func():
     url = "https://example.com"
     data = {"key": "value"}
-    response = requests.post(url, data=json.dumps(data), timeout=30)
+    response = requests.post(url, json=data, timeout=30*1000)
     return response.json()
 """
         

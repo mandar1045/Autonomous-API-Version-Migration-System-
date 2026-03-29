@@ -91,7 +91,7 @@ class APIDiffAnalyzer:
                     # Extract class methods with ClassName.method_name format
                     for item in node.body:
                         if isinstance(item, ast.FunctionDef):
-                            entity = self._extract_function_entity(item, source_code)
+                            entity = self._extract_function_entity(item, source_code, module_name)
                             if entity:
                                 entity.name = f"{node.name}.{item.name}"
                                 entities.append(entity)
@@ -106,7 +106,7 @@ class APIDiffAnalyzer:
                                     is_class_method = True
                                     break
                     if not is_class_method:
-                        entity = self._extract_function_entity(node, source_code)
+                        entity = self._extract_function_entity(node, source_code, module_name)
                         if entity:
                             entities.append(entity)
         except SyntaxError:
@@ -193,7 +193,12 @@ class APIDiffAnalyzer:
             entities.append(entity)
         return entities
 
-    def _extract_function_entity(self, node: ast.FunctionDef, source_code: str) -> Optional[APIEntity]:
+    def _extract_function_entity(
+        self,
+        node: ast.FunctionDef,
+        source_code: str,
+        module_name: str = "unknown",
+    ) -> Optional[APIEntity]:
         """Extract API entity from AST FunctionDef node."""
         # Get function signature
         args = []
@@ -206,13 +211,11 @@ class APIDiffAnalyzer:
             args.append(arg_info)
 
         # Get docstring
-        docstring = None
-        if node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Str):
-            docstring = node.body[0].value.s
+        docstring = ast.get_docstring(node)
 
         return APIEntity(
             name=node.name,
-            module="unknown",  # Would need to be passed in
+            module=module_name,
             signature={'args': args},
             docstring=docstring,
             language="python",

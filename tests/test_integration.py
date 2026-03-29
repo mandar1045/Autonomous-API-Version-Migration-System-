@@ -40,11 +40,11 @@ class TestCompletePipeline(unittest.TestCase):
 import requests
 
 def fetch_user(user_id):
-    response = requests.get("https://api.example.com/users/" + str(user_id), timeout=30)
+    response = requests.get("https://api.example.com/users/" + str(user_id), timeout=30*1000)
     return response.json()
 
 def create_user(data):
-    return requests.post("https://api.example.com/users", data=data, timeout=60)
+    return requests.post("https://api.example.com/users", json=data, timeout=60*1000)
 """
         with open(os.path.join(self.source_dir, "user_api.py"), 'w') as f:
             f.write(file1_content)
@@ -62,7 +62,7 @@ class APIClient:
         response = requests.get(
             f"{self.base_url}/{endpoint}",
             params=params,
-            timeout=45,
+            timeout=45*1000,
             headers={'Authorization': 'Bearer token'}
         )
         return response.json()
@@ -70,8 +70,8 @@ class APIClient:
     def post_data(self, endpoint, data):
         response = requests.post(
             f"{self.base_url}/{endpoint}",
-            data=json.dumps(data),
-            timeout=60
+            json=data,
+            timeout=60*1000
         )
         return response.json()
     
@@ -79,10 +79,10 @@ class APIClient:
         results = []
         for req in requests_list:
             if req['type'] == 'get':
-                response = requests.get(req['url'], timeout=30)
+                response = requests.get(req['url'], timeout=30*1000)
                 results.append(response.json())
             elif req['type'] == 'post':
-                response = requests.post(req['url'], data=req['data'], timeout=120)
+                response = requests.post(req['url'], json=req['data'], timeout=120)
                 results.append(response.json())
         return results
 """
@@ -103,7 +103,7 @@ class DataService:
     
     def update_record(self, record_id: int, data: Dict[str, Any]):
         url = f"https://api.example.com/records/{record_id}"
-        return requests.put(url, data=json.dumps(data), timeout=90)
+        return requests.put(url, json=data, timeout=90*1000)
     
     def delete_with_long_timeout(self, item_id):
         return requests.delete(f"https://api.example.com/items/{item_id}", timeout=300)
@@ -355,9 +355,9 @@ import json
 
 def function_{i}():
     # Various API calls
-    response1 = requests.get('https://api.example.com/endpoint{i}', timeout=30)
-    response2 = requests.post('https://api.example.com/create', data={{'id': {i}}}, timeout=60)
-    response3 = requests.put(f'https://api.example.com/update/{{i}}', timeout=45)
+    response1 = requests.get('https://api.example.com/endpoint{i}', timeout=30*1000)
+    response2 = requests.post('https://api.example.com/create', json={{'id': {i}}}, timeout=60*1000)
+    response3 = requests.put(f'https://api.example.com/update/{{i}}', timeout=45*1000)
     return [response1.json(), response2.json(), response3.json()]
 
 class APIHandler_{i}:

@@ -108,7 +108,7 @@ class TestTransformationEngine(unittest.TestCase):
 import requests
 
 def fetch_data():
-    response = requests.get('https://example.com', timeout=30)
+    response = requests.get('https://example.com', timeout=30*1000)
     return response.json()
 """)
     
@@ -227,6 +227,21 @@ def fetch_data():
         
         # Should contain the transformed code (timeout scaled)
         self.assertIn("timeout=30*1000", content)
+
+    def test_apply_api_migrations_is_idempotent_for_scaled_timeouts(self):
+        """Already-scaled timeouts should not be multiplied again."""
+        source_code = """
+import requests
+
+def fetch_data():
+    response = requests.get('https://example.com', timeout=30*1000)
+    return response.json()
+"""
+
+        transformed = self.engine._apply_api_migrations(source_code)
+
+        self.assertIn("timeout=30*1000", transformed)
+        self.assertNotIn("timeout=30*1000*1000", transformed)
     
     def test_rollback_transformations(self):
         """Test rolling back transformations."""

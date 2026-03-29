@@ -161,7 +161,7 @@ class TestRunner:
                         ["python", "-m", "unittest", file_path],
                         capture_output=True,
                         text=True,
-                        timeout=30
+                        timeout=30*1000
                     )
                     return {
                         "success": result.returncode == 0,
@@ -177,7 +177,7 @@ class TestRunner:
                     ["node", file_path],
                     capture_output=True,
                     text=True,
-                    timeout=30
+                    timeout=30*1000
                 )
                 return {
                     "success": result.returncode == 0,
@@ -214,12 +214,14 @@ class TestRunner:
                     total_files += 1
 
         success_count = sum(1 for r in results if r["result"]["success"])
+        overall_success = success_count == total_files
         return {
             "total_files": total_files,
             "successful_tests": success_count,
             "failed_tests": total_files - success_count,
             "results": results,
-            "overall_success": success_count == total_files
+            "overall_success": overall_success,
+            "success": overall_success,
         }
 
     def generate_test_file(self, source_file: str, target_file: str, output_path: str) -> str:
@@ -335,6 +337,11 @@ class TransformationEngine:
         self.projects: Dict[str, TransformationProject] = {}
         self.workspace_dir = workspace_dir or tempfile.gettempdir()
         self.test_runner = TestRunner()
+
+    @staticmethod
+    def _path_is_file_mode(source_path: str) -> bool:
+        """Return True when the migration is file-to-file rather than directory-to-directory."""
+        return os.path.isfile(source_path)
 
     def create_project(self, name: str, source_path: str, target_path: str) -> str:
         """Create a new migration project."""
@@ -503,15 +510,23 @@ class TransformationEngine:
                 return f"timeout={value}*1000"
             return match.group(0)
 
-        transformed = re.sub(r'timeout=(\d+)(?=\D|$)', replace_timeout, transformed)
+        transformed = re.sub(
+            r'timeout=(\d+)(?!\s*\*\s*1000)(?=\D|$)',
+            replace_timeout,
+            transformed,
+        )
 
-        # 2. Replace data=json.dumps(...) with json=...
+        # 2. Replace json=... with json=...
         # Pattern: data=json\.dumps\(([^)]+)\)
         transformed = re.sub(r'data=json\.dumps\(([^)]+)\)', r'json=\1', transformed)
 
         # 3. In APIClient __init__, update timeout multiplication
         # Pattern: self\.timeout = timeout
-        transformed = re.sub(r'(self\.timeout\s*=\s*timeout)', r'\1 * 1000', transformed)
+        transformed = re.sub(
+            r'(self\.timeout\s*=\s*timeout)(?!\s*\*\s*1000)',
+            r'\1 * 1000',
+            transformed,
+        )
 
         # 4. Update method calls that use data= to json=
         # For requests.post, requests.put, etc.
@@ -538,26 +553,39 @@ class TransformationEngine:
             'failed_operations': 0,
             'backup_path': None,
             'dry_run': dry_run,
+            'proof_certificates': [
+                op.proof_certificate for op in operations if op.proof_certificate
+            ],
         }
 
         if not dry_run and operations:
             target_path = project.target_path
+            file_mode = self._path_is_file_mode(project.source_path)
 
             # Create backup of existing target
             backup_path = f"{target_path}.backup"
             if os.path.exists(target_path):
+                if os.path.exists(backup_path):
+                    if os.path.isfile(backup_path):
+                        os.remove(backup_path)
+                    else:
+                        shutil.rmtree(backup_path)
                 if os.path.isfile(target_path):
                     shutil.copy2(target_path, backup_path)
                 else:
                     shutil.copytree(target_path, backup_path, dirs_exist_ok=True)
                 results['backup_path'] = backup_path
+                project.metadata['backup_path'] = backup_path
 
-            os.makedirs(target_path, exist_ok=True)
+            if file_mode:
+                os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+            else:
+                os.makedirs(target_path, exist_ok=True)
 
             for operation in operations:
                 try:
-                    out_path = os.path.join(target_path, operation.file_path)
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                    out_path = target_path if file_mode else os.path.join(target_path, operation.file_path)
+                    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
                     with open(out_path, 'w', encoding='utf-8') as f:
                         f.write(operation.transformed_content)
                     operation.status = TransformationStatus.COMPLETED
@@ -658,14 +686,16 @@ class TransformationEngine:
 
     def _compare_test_results(self, source_results: Dict, target_results: Dict) -> Dict[str, Any]:
         """Compare test results between source and target."""
+        source_success = source_results.get('success', source_results.get('overall_success', False))
+        target_success = target_results.get('success', target_results.get('overall_success', False))
         comparison = {
-            'source_success': source_results.get('success', False),
-            'target_success': target_results.get('success', False),
+            'source_success': source_success,
+            'target_success': target_success,
             'equivalent': False,
             'notes': []
         }
 
-        if source_results.get('success') == target_results.get('success'):
+        if source_success == target_success:
             comparison['equivalent'] = True
             comparison['notes'].append("Test success status matches")
         else:
@@ -679,6 +709,8 @@ class TransformationEngine:
             raise ValueError(f"Project {project_id} not found")
 
         project = self.projects[project_id]
+        backup_path = project.metadata.get('backup_path') or f"{project.target_path}.backup"
+        file_mode = self._path_is_file_mode(project.source_path)
 
         if strategy == RollbackStrategy.FULL_ROLLBACK:
             # Remove target directory/files
@@ -687,12 +719,21 @@ class TransformationEngine:
                     os.remove(project.target_path)
                 else:
                     shutil.rmtree(project.target_path)
+
+            if os.path.exists(backup_path):
+                if file_mode:
+                    os.makedirs(os.path.dirname(project.target_path) or ".", exist_ok=True)
+                    shutil.copy2(backup_path, project.target_path)
+                    os.remove(backup_path)
+                else:
+                    shutil.copytree(backup_path, project.target_path, dirs_exist_ok=True)
+                    shutil.rmtree(backup_path)
             return True
         elif strategy == RollbackStrategy.PARTIAL_ROLLBACK:
             # Remove only the files whose operations are marked as failed
             for op in project.operations:
                 if op.status == TransformationStatus.FAILED or op.status == "failed":
-                    target_file = os.path.join(project.target_path, op.file_path)
+                    target_file = project.target_path if file_mode else os.path.join(project.target_path, op.file_path)
                     if os.path.exists(target_file):
                         os.remove(target_file)
             return True
@@ -721,13 +762,17 @@ class TransformationEngine:
                 'total_operations': len(project.operations),
                 'completed_operations': len([op for op in project.operations if op.status == TransformationStatus.COMPLETED]),
                 'failed_operations': len([op for op in project.operations if op.status == TransformationStatus.FAILED]),
-                'total_confidence': sum(op.proof_certificate.get('confidence', 0) for op in project.operations if op.proof_certificate)
+                'total_confidence': sum(op.proof_certificate.get('confidence', 0) for op in project.operations if op.proof_certificate),
+                'average_confidence': (
+                    sum(op.proof_certificate.get('confidence', 0) for op in project.operations if op.proof_certificate)
+                    / max(1, len([op for op in project.operations if op.proof_certificate]))
+                )
             },
             'operations': [
                 {
                     'id': op.id,
                     'file': op.file_path,
-                    'status': op.status.value,
+                    'status': op.status.value if isinstance(op.status, TransformationStatus) else str(op.status),
                     'changes_count': len(op.changes),
                     'proof_certificate': op.proof_certificate
                 } for op in project.operations

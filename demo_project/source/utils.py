@@ -7,7 +7,7 @@ def authenticate(username, password):
         'username': username,
         'password': password
     }
-    response = requests.post('https://api.example.com/auth', json=json.dumps(payload), timeout=20)
+    response = requests.post('https://api.example.com/auth', json=json.dumps(payload), timeout=20*1000)
     return response.json()
 
 def get_weather(city):
@@ -21,5 +21,5 @@ def send_notification(user_id, message):
         'user_id': user_id,
         'message': message
     }
-    response = requests.post('https://api.example.com/notifications', data=data, timeout=25*1000)
+    response = requests.post('https://api.example.com/notifications', json=data, timeout=25*1000)
     return response.json()
